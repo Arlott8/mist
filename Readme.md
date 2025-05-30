@@ -87,25 +87,3 @@ It is notable that Mist requires an open gradient flow of stable diffusion model
 models/diffusion/ddpm.py  ---->  models/diffusion/ddpmAttack.py 
 configs/stable-diffusion/v1-inference.yaml  ---->  configs/stable-diffusion/v1-inference-attack.yaml
 ```
- 
-## Citation
-If you find our work valuable and utilize it, we kindly request that you cite our paper.
-
-```
-@inproceedings{liang2023adversarial,
-  title={Adversarial example does good: Preventing painting imitation from diffusion models via adversarial examples},
-  author={Liang, Chumeng and Wu, Xiaoyu and Hua, Yang and Zhang, Jiaru and Xue, Yiming and Song, Tao and Xue, Zhengui and Ma, Ruhui and Guan, Haibing},
-  booktitle={International Conference on Machine Learning},
-  pages={20763--20786},
-  year={2023},
-  organization={PMLR}
-}
-```
-```
-@article{liang2023mist,
-  title={Mist: Towards Improved Adversarial Examples for Diffusion Models},
-  author={Liang, Chumeng and Wu, Xiaoyu},
-  journal={arXiv preprint arXiv:2305.12683},
-  year={2023}
-}
-```
