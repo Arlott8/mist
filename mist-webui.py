@@ -29,9 +29,13 @@ def process_image(image, eps, steps, input_size, rate, mode, block_mode, no_resi
     if image is None:
         raise ValueError
 
-    processed_mask = reverse_mask(image['mask'])
+    if image['layers']:
+        mask_layer = image['layers'][0]
+        processed_mask = mask_layer.split()[-1].convert('RGB')
+    else:
+        processed_mask = None
 
-    image = image['image']
+    image = image['background']
 
     print('tar_img loading fin')
     config['parameters']['epsilon'] = eps / 255.0 * (1 - (-1))
@@ -54,7 +58,8 @@ def process_image(image, eps, steps, input_size, rate, mode, block_mode, no_resi
         tar_img = load_image_from_path(target_image_path, input_size)
         bls_h = bls_w = bls
         target_size = [input_size, input_size]
-    processed_mask = load_image_from_path(processed_mask, target_size[0], target_size[1], True)
+    if processed_mask is not None:
+        processed_mask = load_image_from_path(processed_mask, target_size[0], target_size[1], True)
     config['parameters']['input_size'] = bls
     print(config['parameters'])
     output_image = np.zeros([input_size, input_size, 3])
@@ -78,7 +83,7 @@ if __name__ == "__main__":
             gr.Image("MIST_logo.png", show_label=False)
             with gr.Row():
                 with gr.Column():
-                    image = gr.Image(type='pil', tool='sketch')
+                    image = gr.ImageEditor(type='pil', brush=gr.Brush(colors=["#FFFFFF"], color_mode="fixed"))
                     eps = gr.Slider(0, 32, step=4, value=16, label='Strength',
                                     info="Larger strength results in stronger defense at the cost of more visible noise.")
                     steps = gr.Slider(0, 1000, step=1, value=100, label='Steps',
