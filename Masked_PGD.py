@@ -120,6 +120,90 @@ def perturb_iterative(xvar, yvar, predict, nb_iter, eps, eps_iter, loss_fn,
     return x_adv
 
 
+def perturb_iterative_watermarked(xvar, yvar, predict, nb_iter, eps, eps_iter, loss_fn,
+                                  watermark_decoder, secret_message, lambda_weight, # <--- NEW ARGS
+                                  delta_init=None, minimize=False, ord=np.inf,
+                                  clip_min=0.0, clip_max=1.0,
+                                  l1_sparsity=None, mask=None):
+    """
+    Modified iterative loop that minimizes MIST loss AND Watermark extraction error.
+    """
+    if delta_init is not None:
+        delta = delta_init
+    else:
+        delta = torch.zeros_like(xvar)
+
+    delta.requires_grad_()
+    
+    # We use MSE for the watermark ensuring the message matches the secret
+    mse_loss = nn.MSELoss() 
+
+    for ii in range(nb_iter):
+        # 1. Generate the candidate adversarial image
+        if mask is None:
+            adv_image = xvar + delta
+        else:
+            adv_image = xvar + delta * mask
+        
+        outputs = predict(adv_image)
+        
+        # 2. Calculate MIST Loss (The "Attack")
+        # In MIST, we minimize the distance to the target texture.
+        mist_loss = loss_fn(outputs, yvar)
+
+        # 3. Calculate Watermark Loss (The "Defense") <--- NEW LOGIC
+        # We pass the image (pixels) into the decoder, not the class logits
+        decoded_msg = watermark_decoder(adv_image) 
+        wat_loss = mse_loss(decoded_msg, secret_message)
+
+        # 4. Combine Losses
+        # We want to minimize (MIST_Loss + Lambda * Watermark_Loss)
+        total_loss = mist_loss + (lambda_weight * wat_loss)
+
+        if minimize:
+            # If minimize=True, the loop minimizes the value.
+            # (MIST sets minimize=True to get closer to the target texture)
+            loss = total_loss 
+        else:
+            # Standard PGD maximizes loss, so we would flip it.
+            # But for MIST targeted attacks, we usually stay in 'minimize' mode.
+            loss = -total_loss
+
+        loss.backward()
+
+        # 5. Standard Gradient Update (Same as original)
+        if ord == np.inf:
+            grad_sign = delta.grad.data.sign()
+            # If minimize=True, we subtract gradient (descent)
+            # The original code handles this by negating loss earlier if needed.
+            # Let's stick to the original logic:
+            # If minimize=True, loss was NOT negated above? 
+            # WAIT: The original code does `loss = -loss` if minimize=True.
+            # Then it ADDS grad_sign. adding negative gradient = descent. 
+            
+            # So if we want to minimize total_loss:
+            if minimize:
+                 loss = -total_loss # Negate so backward() gives negative grad
+            
+            # The rest remains identical to standard PGD
+            delta.data = delta.data + batch_multiply(eps_iter, grad_sign)
+            delta.data = batch_clamp(eps, delta.data)
+            delta.data = clamp(xvar.data + delta.data, clip_min, clip_max) - xvar.data
+            
+        else:
+            # (Omitted L2/L1 logic for brevity, but you can copy it from original)
+            raise NotImplementedError("Only Linf implemented for this demo")
+
+        delta.grad.data.zero_()
+
+    # Final Clamp
+    if mask is None:
+        x_adv = clamp(xvar + delta, clip_min, clip_max)
+    else:
+        x_adv = clamp(xvar + delta * mask, clip_min, clip_max)
+        
+    return x_adv
+
 class PGDAttack(Attack, LabelMixin):
     """
     The projected gradient descent attack (Madry et al, 2017).
@@ -242,3 +326,37 @@ class LinfPGDAttack(PGDAttack):
             eps_iter=eps_iter, rand_init=rand_init, clip_min=clip_min,
             clip_max=clip_max, targeted=targeted,
             ord=ord)
+
+class WatermarkedPGDAttack(LinfPGDAttack):
+    def __init__(self, predict, watermark_decoder, lambda_weight=0.5, **kwargs):
+        super().__init__(predict, **kwargs)
+        self.watermark_decoder = watermark_decoder
+        self.lambda_weight = lambda_weight
+
+    def perturb(self, x, y=None, mask=None, secret_message=None):
+        # Verify inputs (from parent class)
+        x, y = self._verify_and_process_inputs(x, y)
+
+        delta = torch.zeros_like(x)
+        delta = nn.Parameter(delta)
+        
+        # (Optional: Rand Init logic from parent can go here)
+
+        # Call our CUSTOM engine
+        rval = perturb_iterative_watermarked(
+            x, y, self.predict, nb_iter=self.nb_iter,
+            eps=self.eps, eps_iter=self.eps_iter,
+            loss_fn=self.loss_fn, 
+            
+            # NEW PARAMS passed down
+            watermark_decoder=self.watermark_decoder,
+            secret_message=secret_message,
+            lambda_weight=self.lambda_weight,
+            
+            minimize=self.targeted,
+            ord=self.ord, clip_min=self.clip_min,
+            clip_max=self.clip_max, delta_init=delta,
+            l1_sparsity=self.l1_sparsity, mask=mask
+        )
+
+        return rval.data

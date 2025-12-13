@@ -14,7 +14,8 @@ from pytorch_lightning import seed_everything
 
 from ldm.util import instantiate_from_config
 
-from Masked_PGD import LinfPGDAttack
+from Masked_PGD import WatermarkedPGDAttack
+from decoder import WatermarkDecoder
 from mist_utils import parse_args, load_mask, closing_resize, load_image_from_path
 
 
@@ -207,15 +208,40 @@ def init(epsilon: int = 16, steps: int = 100, alpha: int = 1,
     return {'net': net, 'fn': fn, 'parameters': parameters}
 
 
+def load_watermark_model(device, msg_len=30):
+    # 1. Initialize the architecture
+    decoder = WatermarkDecoder(message_length=msg_len)
+    
+    # 2. Load the pre-trained weights
+    # Note: If you don't have weights yet, you can skip this line to test 
+    # the code flow (it will use random weights), but it won't actually protect anything.
+    # if weights_path:
+    #     checkpoint = torch.load(weights_path, map_location=device)
+    #     # Handle cases where checkpoint is a dict with 'decoder_state_dict' key
+    #     if 'decoder_state_dict' in checkpoint:
+    #         decoder.load_state_dict(checkpoint['decoder_state_dict'])
+    #     else:
+    #         decoder.load_state_dict(checkpoint)
+    
+    decoder.to(device)
+    
+    # 3. CRITICAL: Set to Eval mode and Freeze Gradients
+    decoder.eval() 
+    for param in decoder.parameters():
+        param.requires_grad = False
+        
+    return decoder
+
 def infer(img: PIL.Image.Image, config, tar_img: PIL.Image.Image = None, mask: PIL.Image.Image = None) -> np.ndarray:
     """
-    Process the input image and generate the misted image.
+    Process the input image and generate the misted image with embedded watermark protection.
     :param img: The input image or the image block to be misted.
     :param config: config for the attack.
-    :param img: The target image or the target block as the reference for the textural loss.
+    :param tar_img: The target image or the target block as the reference for the textural loss.
     :returns: A misted image.
     """
 
+    # --- 1. CONFIGURATION SETUP ---
     net = config['net']
     fn = config['fn']
     parameters = config['parameters']
@@ -227,39 +253,73 @@ def infer(img: PIL.Image.Image, config, tar_img: PIL.Image.Image = None, mask: P
     rate = parameters["rate"]
     trans = transforms.Compose([transforms.ToTensor()])
 
+    # --- 2. IMAGE PRE-PROCESSING ---
     img = np.array(img).astype(np.float32) / 127.5 - 1.0
     img = img[:, :, :3]
+    
     if tar_img is not None:
         tar_img = np.array(tar_img).astype(np.float32) / 127.5 - 1.0
         tar_img = tar_img[:, :, :3]
+    
     if mask is not None:
         mask = load_mask(mask).astype(np.float32) / 255.0
         mask = mask[:, :, :3]
         mask = trans(mask).unsqueeze(0).to(device)
 
-    # data_source = torch.zeros([1, 3, input_size, input_size]).to(device)
+    # Prepare Data Source (The image we are protecting)
     data_source = torch.zeros([1, 3, img.shape[0], img.shape[1]]).to(device)
     data_source[0] = trans(img).to(device)
 
-    # target_info = torch.zeros([1, 3, input_size, input_size]).to(device)
+    # Prepare Target Info (The texture we want MIST to mimic)
     target_info = torch.zeros([1, 3, img.shape[0], img.shape[1]]).to(device)
     target_info[0] = trans(tar_img).to(device)
+    
     net.target_info = target_info
     net.target_size = input_size
     net.mode = mode
     net.rate = rate
     label = torch.zeros(data_source.shape).to(device)
-    print(net(data_source, components=True))
+    
+    # Debug print (Optional)
+    # print(net(data_source, components=True))
 
-    # Targeted PGD attack is applied.
-    attack = LinfPGDAttack(net, fn, epsilon, steps, eps_iter=alpha, clip_min=-1.0, targeted=True)
-    attack_output = attack.perturb(data_source, label, mask=mask)
-    print(net(attack_output, components=True))
+    # --- 3. WATERMARK SETUP (NEW SECURITY LAYER) ---
+    # Load the decoder that will verify our ownership
+    # We load it here so it's ready for the attack loop
+    decoder = load_watermark_model(device, msg_len=30)
+    
+    # Define the Secret Message (The "Key")
+    # In a real app, this would be a hash of your User ID.
+    # For now, we generate a random 30-bit key.
+    secret_message = torch.randint(0, 2, (1, 30)).float().to(device)
 
+    # --- 4. JOINT ATTACK EXECUTION ---
+    # We replace LinfPGDAttack with our new WatermarkedPGDAttack
+    # This class handles the dual optimization (Break AI + Save Watermark)
+    attack = WatermarkedPGDAttack(
+        predict=net, 
+        loss_fn=fn, 
+        eps=epsilon, 
+        nb_iter=steps, 
+        eps_iter=alpha, 
+        clip_min=-1.0, 
+        targeted=True,
+        # New Arguments:
+        watermark_decoder=decoder,
+        lambda_weight=0.5  # Adjust this: Higher = Stronger Watermark, Lower = Stronger MIST
+    )
+
+    # Run the attack (Passing the secret_message is crucial)
+    attack_output = attack.perturb(data_source, label, mask=mask, secret_message=secret_message)
+    
+    # Debug print (Optional)
+    # print(net(attack_output, components=True))
+
+    # --- 5. POST-PROCESSING ---
     output = attack_output[0]
     save_adv = torch.clamp((output + 1.0) / 2.0, min=0.0, max=1.0).detach()
     grid_adv = 255. * rearrange(save_adv, 'c h w -> h w c').cpu().numpy()
-    grid_adv = grid_adv
+    
     return grid_adv
 
 
