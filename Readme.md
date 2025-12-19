@@ -63,6 +63,50 @@ Use the following command to boost webui. See the [quickstart document](https://
 python mist-webui.py
 ```
 
+### Embedding Watermarks with Mist
+
+`mist_watermark.py` is a wrapper script that combines invisible watermarking with MIST protection in two stages:
+
+**Stage 1:** Embeds a robust invisible watermark (DWT+DCT) into the image.  
+**Stage 2:** Applies MIST protection using `mist_v3.py`.
+
+This allows you to add a copyright signature or ownership mark that persists through the MIST protection process.
+
+#### Usage
+
+```
+python mist_watermark.py -img <input_image> -wm <watermark_text> [MIST options]
+```
+
+#### Example
+
+```
+python mist_watermark.py -img test/sample.png -wm "COPYRIGHT2025" -e 16 -n 100 -m 2
+```
+
+#### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `-img, --input_image_path` | Path to the original image | (required) |
+| `-wm, --watermark_text` | Text to embed as watermark | "COPYRIGHT" |
+| `-e, --epsilon` | Strength of MIST attack | 16 |
+| `-n, --steps` | Number of MIST steps | 100 |
+| `-m, --mode` | MIST mode (0: Semantic, 1: Textural, 2: Fused) | 2 |
+| `-r, --rate` | MIST rate (exponent) | 1 |
+| `--output_name` | Name of output file | "protected_output" |
+| `--non_resize` | Do not resize image | (flag) |
+| `--verify` | Verify watermark after processing | (flag) |
+
+**Note:** Keep the watermark message short (e.g., "Copyright2025") to ensure robustness through the MIST process.
+
+### Verifying Watermarks
+
+Use `check_watermark.py` to verify if a watermark was successfully embedded and survived the MIST protection process:
+
+```
+python check_watermark.py -img <protected_image> -wm <expected_watermark_text>
+```
 
 ### Robustness under input transformation
 
